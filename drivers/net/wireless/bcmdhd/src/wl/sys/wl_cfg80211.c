@@ -147,7 +147,7 @@ u32 wl_dbg_level = WL_DBG_ERR;
 /* Set this to 1 to use a seperate interface (p2p0)
  *  for p2p operations.
  */
-#define ENABLE_P2P_INTERFACE	1
+#define ENABLE_P2P_INTERFACE	0
 
 /* This is to override regulatory domains defined in cfg80211 module (reg.c)
  * By default world regulatory domain defined in reg.c puts the flags NL80211_RRF_PASSIVE_SCAN
@@ -264,8 +264,6 @@ static s32 wl_cfg80211_get_key(struct wiphy *wiphy, struct net_device *dev,
 static s32 wl_cfg80211_config_default_mgmt_key(struct wiphy *wiphy,
 	struct net_device *dev,	u8 key_idx);
 static s32 wl_cfg80211_resume(struct wiphy *wiphy);
-static s32 wl_cfg80211_mgmt_tx_cancel_wait(struct wiphy *wiphy,
-	struct net_device *dev, u64 cookie);
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)
 static s32 wl_cfg80211_suspend(struct wiphy *wiphy, struct cfg80211_wowlan *wow);
 #else
@@ -2039,7 +2037,7 @@ __wl_cfg80211_scan(struct wiphy *wiphy, struct net_device *ndev,
 					}
 					p2p_scan(wl) = true;
 				}
-			} else if (wl_get_mode_by_netdev(wl, ndev) != WL_MODE_IBSS) {
+			} else {
 				/* legacy scan trigger
 				 * So, we have to disable p2p discovery if p2p discovery is on
 				 */
@@ -3642,68 +3640,6 @@ get_station_err:
 			cfg80211_disconnected(dev, 0, NULL, 0, GFP_KERNEL);
 			wl_link_down(wl);
 		}
-	}
-	else if (wl_get_mode_by_netdev(wl, dev) == WL_MODE_IBSS) {
-		u8 *curmacp = wl_read_prof(wl, dev, WL_PROF_BSSID);
-
-		memset(&scb_val, 0, sizeof(scb_val));
-		bcopy(mac, &scb_val.ea, 6);
-
-		err = wldev_ioctl(dev, WLC_GET_RSSI, &scb_val,
-			sizeof(scb_val_t), false);
-		if (err) {
-			WL_ERR(("Could not get rssi (%d)\n", err));
-			return err;
-		}
-		rssi = dtoh32(scb_val.val);
-
-		/* the RSSI value from the firmware is an average but user-space
-		expects it as signal, so we fill in both */
-		sinfo->filled |= STATION_INFO_SIGNAL;
-		sinfo->signal = rssi;
-		sinfo->filled |= STATION_INFO_SIGNAL_AVG;
-		sinfo->signal_avg = rssi;
-
-		if (!memcmp(mac, curmacp, ETHER_ADDR_LEN)) {
-			// BSSID is not a real station. Can't get sta_info; Done
-			return 0;
-		}
-
-		err = wldev_iovar_getbuf(dev, "sta_info", (struct ether_addr *)mac,
-			ETHER_ADDR_LEN, wl->ioctl_buf, WLC_IOCTL_MAXLEN, &wl->ioctl_buf_sync);
-		if (err < 0) {
-			WL_ERR(("GET STA INFO failed, %d\n", err));
-			return err;
-		}
-
-		sta = (sta_info_t *)wl->ioctl_buf;
-		sta->len = dtoh16(sta->len);
-		sta->cap = dtoh16(sta->cap);
-		sta->flags = dtoh32(sta->flags);
-		sta->idle = dtoh32(sta->idle);
-		sta->in = dtoh32(sta->in);
-		sta->listen_interval_inms = dtoh32(sta->listen_interval_inms);
-		sta->tx_pkts = dtoh32(sta->tx_pkts);
-		sta->tx_failures = dtoh32(sta->tx_failures);
-		sta->rx_ucast_pkts = dtoh32(sta->rx_ucast_pkts);
-		sta->rx_mcast_pkts = dtoh32(sta->rx_mcast_pkts);
-		sta->tx_rate = dtoh32(sta->tx_rate);
-		sta->rx_rate = dtoh32(sta->rx_rate);
-		sta->rx_decrypt_succeeds = dtoh32(sta->rx_decrypt_succeeds);
-		sta->rx_decrypt_failures = dtoh32(sta->rx_decrypt_failures);
-
-		sinfo->filled |= STATION_INFO_INACTIVE_TIME | STATION_INFO_TX_PACKETS |
-			STATION_INFO_TX_FAILED | STATION_INFO_RX_PACKETS |
-			STATION_INFO_TX_BITRATE | STATION_INFO_RX_BITRATE |
-			STATION_INFO_RX_DROP_MISC;
-
-		sinfo->inactive_time = sta->idle * 1000;
-		sinfo->tx_packets = sta->tx_pkts;
-		sinfo->tx_failed = sta->tx_failures;
-		sinfo->rx_packets = sta->rx_ucast_pkts + sta->rx_mcast_pkts;
-		sinfo->txrate.legacy = sta->tx_rate / 100;
-		sinfo->rxrate.legacy = sta->rx_rate / 100;
-		sinfo->rx_dropped_misc = sta->rx_decrypt_failures;
 	}
 
 	return err;
@@ -5491,7 +5427,6 @@ static struct cfg80211_ops wl_cfg80211_ops = {
 	.set_channel = wl_cfg80211_set_channel,
 	.set_beacon = wl_cfg80211_add_set_beacon,
 	.add_beacon = wl_cfg80211_add_set_beacon,
-	.mgmt_tx_cancel_wait = wl_cfg80211_mgmt_tx_cancel_wait,
 };
 
 s32 wl_mode_to_nl80211_iftype(s32 mode)
@@ -5528,7 +5463,7 @@ static s32 wl_setup_wiphy(struct wireless_dev *wdev, struct device *sdiofunc_dev
 	wdev->wiphy->max_scan_ssids = WL_SCAN_PARAMS_SSID_MAX;
 	wdev->wiphy->max_num_pmkids = WL_NUM_PMKIDS_MAX;
 	wdev->wiphy->interface_modes =
-		BIT(NL80211_IFTYPE_STATION) | BIT(NL80211_IFTYPE_ADHOC)
+		BIT(NL80211_IFTYPE_STATION)
 	    | BIT(NL80211_IFTYPE_AP) | BIT(NL80211_IFTYPE_MONITOR);
 
 	wdev->wiphy->bands[IEEE80211_BAND_2GHZ] = &__wl_band_2ghz;
@@ -5684,7 +5619,7 @@ static s32 wl_inform_single_bss(struct wl_priv *wl, struct wl_bss_info *bi)
 		return EINVAL;
 	}
 
-	WL_DBG(("SSID : \"%s\", rssi %d, channel %d, capability : 0x04%x, bssid %pM "
+	WL_DBG(("SSID : \"%s\", rssi %d, channel %d, capability : 0x04%x, bssid %pM"
 			"mgmt_type %d frame_len %d\n", bi->SSID,
 			notif_bss_info->rssi, notif_bss_info->channel,
 			mgmt->u.beacon.capab_info, &bi->BSSID, mgmt_type,
@@ -5692,7 +5627,7 @@ static s32 wl_inform_single_bss(struct wl_priv *wl, struct wl_bss_info *bi)
 
 	signal = notif_bss_info->rssi * 100;
 #if defined(WLP2P) && (ENABLE_P2P_INTERFACE)
-	if (wl->p2p && wl->p2p_net && wl->scan_request &&
+	if (wl->p2p_net && wl->scan_request &&
 		wl->scan_request->dev == wl->p2p_net) {
 #else
 	if (p2p_is_on(wl) && p2p_scan(wl)) {
@@ -7759,10 +7694,11 @@ s32 wl_cfg80211_attach_post(struct net_device *ndev)
 	if (wl && !wl_get_drv_status(wl, READY, ndev)) {
 			if (wl->wdev &&
 				wl_cfgp2p_supported(wl, ndev)) {
+#if !ENABLE_P2P_INTERFACE
 				wl->wdev->wiphy->interface_modes |=
 					(BIT(NL80211_IFTYPE_P2P_CLIENT)|
 					BIT(NL80211_IFTYPE_P2P_GO));
-
+#endif
 				if ((err = wl_cfgp2p_init_priv(wl)) != 0)
 					goto fail;
 
@@ -8910,11 +8846,4 @@ int wl_cfg80211_do_driver_init(struct net_device *net)
 void wl_cfg80211_enable_trace(int level)
 {
 	wl_dbg_level |= WL_DBG_DBG;
-}
-
-static s32
-wl_cfg80211_mgmt_tx_cancel_wait(struct wiphy *wiphy,
-	struct net_device *dev, u64 cookie)
-{
-	return 0;
 }

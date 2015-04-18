@@ -408,8 +408,9 @@ int mxt_check_firmware(struct device *dev, int *ver)
 
 	return 0;
 }
-int mxt_do_firmware_load(struct mxt_data *mxt, const char *fn) 
+int mxt_load_firmware(struct device *dev, const char *fn)
 {
+	struct mxt_data *mxt = dev_get_drvdata(dev);
 
 	unsigned int frame_size;
 	unsigned int pos = 0;
@@ -515,11 +516,5 @@ err_fw:
 #endif
 
 	return ret;
-}
-int mxt_load_firmware(struct device *dev, const char *fn)
-{
-	struct mxt_data *mxt = dev_get_drvdata(dev);
-
-	return mxt_do_firmware_load(mxt, fn);
 }
 

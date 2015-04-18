@@ -173,6 +173,28 @@ static void fg_test_print(void)
 
 }
 
+static int fg_read_avg_vcell(void)
+{
+	struct i2c_client *client = fg_i2c_client;
+	u8 data[2];
+	u32 avg_vcell;
+	u16 w_data;
+	u32 temp;
+	u32 temp2;
+	if (fg_i2c_read(client, AVR_VCELL_REG, data, 2) < 0) {
+		pr_err("%s: Failed to read VCELL\n", __func__);
+		return -1;
+	}
+	w_data = (data[1]<<8) | data[0];
+	temp = (w_data & 0xFFF) * 78125;
+	avg_vcell = temp / 1000000;
+	temp = ((w_data & 0xF000) >> 4) * 78125;
+	temp2 = temp / 1000000;
+	avg_vcell += (temp2 << 4);
+	return avg_vcell;
+}
+
+
 static int fg_read_vcell(void)
 {
 	struct i2c_client *client = fg_i2c_client;
@@ -329,6 +351,9 @@ static int fg_read_soc(void)
 	if (!(chip->info.pr_cnt % PRINT_COUNT))
 		pr_info("%s : SOC(%d), data(0x%04x)\n",
 			__func__, soc, (data[1]<<8) | data[0]);
+
+	/* for 100% algorithm */
+	soc = soc * 100 / 99;
 
 	return soc;
 }
@@ -1053,6 +1078,50 @@ static void add_low_batt_comp_cnt(int range, int level)
 #endif
 }
 
+#define POWER_OFF_SOC_HIGH_MARGIN	0x200
+#define POWER_OFF_VOLTAGE_HIGH_MARGIN	3500
+#define POWER_OFF_VOLTAGE_NOW_LOW_MARGIN	3350
+#define POWER_OFF_VOLTAGE_AVG_LOW_MARGIN        3400
+
+void prevent_early_late_poweroff(int vcell, int *fg_soc)
+{
+	struct i2c_client *client = fg_i2c_client;
+	int repsoc, repsoc_data = 0;
+	int read_val;
+	int avg_vcell;
+	u8 data[2];
+	if (fg_i2c_read(client, SOCREP_REG, data, 2) < 0) {
+		pr_err("%s: Failed to read SOCREP\n", __func__);
+		return;
+	}
+	repsoc = data[1];
+	repsoc_data = ((data[1] << 8) | data[0]);
+	if (repsoc_data > POWER_OFF_SOC_HIGH_MARGIN)
+		return;
+	avg_vcell = fg_read_avg_vcell();
+	pr_info("%s: soc(%d%%(0x%04x)), v(%d), avg_v(%d)\n", \
+		__func__, repsoc, repsoc_data, vcell, avg_vcell);
+	if (vcell > POWER_OFF_VOLTAGE_HIGH_MARGIN) {
+		read_val = fg_read_register(FULLCAP_REG);
+		/* FullCAP * 0.013 */
+		fg_write_register(REMCAP_REP_REG, (u16)(read_val * 13 / 1000));
+		msleep(200);
+		*fg_soc = fg_read_soc();
+		pr_info("%s: 1.3%% case: new soc(%d), v(%d), avg_v(%d)\n", \
+					__func__, *fg_soc, vcell, avg_vcell);
+	} else if ((vcell < POWER_OFF_VOLTAGE_NOW_LOW_MARGIN) && \
+		(avg_vcell < POWER_OFF_VOLTAGE_AVG_LOW_MARGIN)) {
+		read_val = fg_read_register(FULLCAP_REG);
+		/* FullCAP * 0.009 */
+		fg_write_register(REMCAP_REP_REG, (u16)(read_val * 9 / 1000));
+		msleep(200);
+		*fg_soc = fg_read_soc();
+		pr_info("%s: 0%% case: new soc(%d), v(%d), avg_v(%d)\n", \
+					__func__, *fg_soc, vcell, avg_vcell);
+	}
+}
+
+
 void reset_low_batt_comp_cnt(void)
 {
 	struct i2c_client *client = fg_i2c_client;
@@ -1241,8 +1310,11 @@ int p3_low_batt_compensation(int fg_soc, int fg_vcell, int fg_current)
 		}
 
 		if (check_low_batt_comp_condtion(&new_level)) {
-			fg_low_batt_compensation(new_level);
-			reset_low_batt_comp_cnt();
+			/* Disable 3% low battery compensation */
+			/* duplicated action with 1% low battery compensation */
+			if (new_level < 2)
+				fg_low_batt_compensation(new_level);
+				reset_low_batt_comp_cnt();
 #ifdef CONFIG_TARGET_LOCALE_KOR
 			nRet = 1;
 #endif
@@ -1268,7 +1340,10 @@ int p3_low_batt_compensation(int fg_soc, int fg_vcell, int fg_current)
 #ifndef CONFIG_TARGET_LOCALE_KOR
 	nRet = fg_soc;
 #endif
-
+#if defined CONFIG_MACH_SAMSUNG_P4LTE
+	/* Prevent power off over 3500mV */
+	prevent_early_late_poweroff(fg_vcell, &fg_soc);
+#endif
 	return nRet;
 }
 

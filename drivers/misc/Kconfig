@@ -593,11 +593,4 @@ source "drivers/misc/carma/Kconfig"
 source "drivers/misc/tegra-baseband/Kconfig"
 source "drivers/misc/modem_if/Kconfig"
 
-config BLX
-	bool "Support for Battery Life eXtender"
-	default n
-	---help---
-	  Allow the user to set a limit on how many percent the battery will
-		charge to. Anywhere from 0-100.
-
 endif # MISC_DEVICES

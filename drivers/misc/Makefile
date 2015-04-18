@@ -59,7 +59,6 @@ obj-$(CONFIG_TEGRA_BB_SUPPORT)	+= tegra-baseband/
 obj-$(CONFIG_MAX1749_VIBRATOR)	+= max1749.o
 obj-$(CONFIG_BCM4751_POWER)	+= bcm4751-power.o
 obj-$(CONFIG_BCM4751_RFKILL)	+= bcm4751-rfkill.o
-obj-$(CONFIG_BLX)    += blx.o
 ifeq ($(CONFIG_MACH_SAMSUNG_P4LTE), y)
 obj-$(CONFIG_SEC_MISC)		+= sec_misc-p4lte.o
 else

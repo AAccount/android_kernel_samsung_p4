@@ -37,9 +37,6 @@
 #include <linux/kernel_sec_common.h>
 #endif
 
-#ifdef CONFIG_BLX
-#include <linux/blx.h>
-#endif
 
 #define FAST_POLL	40	/* 40 sec */
 #define SLOW_POLL	(30*60)	/* 30 min */
@@ -434,8 +431,7 @@ static int p3_get_bat_level(struct power_supply *bat_ps)
 	/* Algorithm for reducing time to fully charged (from MAXIM) */
 	if (battery->info.charging_enabled &&  /* Charging is enabled */
 		!battery->info.batt_is_recharging &&  /* Not Recharging */
-		(battery->info.charging_source == CHARGER_AC ||
-		battery->info.charging_source == CHARGER_USB) &&
+		battery->info.charging_source == CHARGER_AC &&  /* Only AC */
 		!battery->is_first_check &&  /* Skip first check */
 		(fg_vfsoc>70 && (fg_current>20 && fg_current<250) &&
 		(avg_current>20 && avg_current<260))) {
@@ -453,9 +449,8 @@ static int p3_get_bat_level(struct power_supply *bat_ps)
 	else
 		battery->full_check_flag = 0;
 
-	if ((battery->info.charging_source == CHARGER_AC ||
-	   battery->info.charging_source == CHARGER_USB) &&
-		battery->info.batt_improper_ta == 0)  {
+	if (battery->info.charging_source == CHARGER_AC &&
+		battery->info.batt_improper_ta == 0) {
 		if (is_over_abs_time(battery)) {
 			/* fg_soc = 100; */
 			/* battery->info.batt_is_full = 1; */
@@ -529,7 +524,8 @@ __end__:
 	if (battery->is_first_check)
 		battery->is_first_check = false;
 
-	if (battery->info.batt_is_full)
+	if (battery->info.batt_is_full &&
+		(battery->info.charging_source != CHARGER_USB))
 		fg_soc = 100;
 #if 0
 	else {
@@ -597,13 +593,13 @@ static void p3_set_chg_en(struct battery_data *battery, int enable)
 					pr_info("%s: improper charger!!\n",
 						__func__);
 					battery->info.batt_improper_ta = 1;
-					p3_set_charging(battery, 1);
+					p3_set_charging(battery, 2);
 				}
 				gpio_set_value(charger_enable_line, 0);
 			} else if (battery->current_cable_status ==
 				CHARGER_USB) {
 				pr_info("USB charger!!");
-				p3_set_charging(battery, 1);
+				p3_set_charging(battery, 2);
 				gpio_set_value(charger_enable_line, 0);
 			} else {
 				pr_info("else type charger!!");
@@ -748,38 +744,14 @@ static int p3_bat_get_charging_status(struct battery_data *battery)
 	switch (battery->info.charging_source) {
 	case CHARGER_BATTERY:
 	case CHARGER_USB:
-		if (battery->current_cable_status != CHARGER_BATTERY) 
-		{
-#ifdef CONFIG_BLX
-			if ((get_charginglimit() != MAX_CHARGINGLIMIT && battery->info.level >= get_charginglimit()) ||
-				battery->info.batt_is_full || battery->info.level == 100)
-				return POWER_SUPPLY_STATUS_FULL;
-			else if ((get_charginglimit() != MAX_CHARGINGLIMIT && battery->info.level < get_charginglimit()) ||
-						!battery->info.batt_is_full || battery->info.level != 100)
-				return POWER_SUPPLY_STATUS_CHARGING;
-#else
-			if (battery->info.batt_is_full || battery->info.level == 100)
-				return POWER_SUPPLY_STATUS_FULL;
-			else if (!battery->info.batt_is_full || battery->info.level != 100)
-				return POWER_SUPPLY_STATUS_CHARGING;
-#endif
-		} 
-		else
-			return POWER_SUPPLY_STATUS_DISCHARGING;
+		return POWER_SUPPLY_STATUS_DISCHARGING;
 	case CHARGER_AC:
-#ifdef CONFIG_BLX
-		if ((get_charginglimit() != MAX_CHARGINGLIMIT && battery->info.level >= get_charginglimit()) ||
-			battery->info.batt_is_full || battery->info.level == 100)
+		if (battery->info.batt_is_full)
 			return POWER_SUPPLY_STATUS_FULL;
+		else if (battery->info.batt_improper_ta)
+			return POWER_SUPPLY_STATUS_DISCHARGING;
 		else
 			return POWER_SUPPLY_STATUS_CHARGING;
-#else
-		if (battery->info.batt_is_full ||
-			battery->info.level == 100)
-			return POWER_SUPPLY_STATUS_FULL;
-		else
-			return POWER_SUPPLY_STATUS_CHARGING;
-#endif
 	case CHARGER_DISCHARGE:
 		return POWER_SUPPLY_STATUS_NOT_CHARGING;
 	default:
@@ -880,7 +852,6 @@ static struct device_attribute p3_battery_attrs[] = {
 #ifdef CONFIG_MACH_SAMSUNG_P5
 	SEC_BATTERY_ATTR(batt_temp_cels),
 #endif
-	SEC_BATTERY_ATTR(batt_current),
 	SEC_BATTERY_ATTR(batt_charging_source),
 	SEC_BATTERY_ATTR(fg_soc),
 	SEC_BATTERY_ATTR(batt_reset_soc),
@@ -890,8 +861,7 @@ static struct device_attribute p3_battery_attrs[] = {
 	SEC_BATTERY_ATTR(batt_temp_check),
 	SEC_BATTERY_ATTR(batt_full_check),
 #ifdef CONFIG_SAMSUNG_LPM_MODE
-	//SEC_BATTERY_ATTR(batt_lp_charging), samsung default and works on stock rom
-	SEC_BATTERY_ATTR(charging_mode_booting),
+	SEC_BATTERY_ATTR(batt_lp_charging),
 	SEC_BATTERY_ATTR(voltage_now),
 #endif
 	SEC_BATTERY_ATTR(fg_capacity),
@@ -903,7 +873,6 @@ enum {
 #ifdef CONFIG_MACH_SAMSUNG_P5
 	BATT_TEMP_CELS,
 #endif
-	BATT_CURRENT,
 	BATT_CHARGING_SOURCE,
 	BATT_FG_SOC,
 	BATT_RESET_SOC,
@@ -963,10 +932,6 @@ static ssize_t p3_bat_show_property(struct device *dev,
 			temp);
 			break;
 #endif
-	case BATT_CURRENT:
-		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
-		get_fuelgauge_value(FG_CURRENT));
-		break;
 	case BATT_CHARGING_SOURCE:
 		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
 		test_batterydata->info.charging_source);
@@ -1659,8 +1624,7 @@ static int __devinit p3_bat_probe(struct platform_device *pdev)
 	p3_cable_check_status(battery);
 
 	/* before enable fullcharge interrupt, check fullcharge */
-	if ((battery->info.charging_source == CHARGER_AC ||
-	   battery->info.charging_source == CHARGER_USB)
+	if (battery->info.charging_source == CHARGER_AC
 		&& battery->info.charging_enabled
 		&& gpio_get_value(pdata->charger.fullcharge_line) == 1)
 		p3_cable_charging(battery);
