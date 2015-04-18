@@ -620,13 +620,6 @@ config TEGRA_PREPOWER_WIFI
 	default n
 	help
 	  Pre-power up the on board WiFi chip
-
-config TEGRA2_VOLTAGE_CONTROL
-	bool "Tegra 2 voltage control"
-	depends on ARCH_TEGRA_2x_SOC
-	default n
-	help
-	  Tegra 2 voltage control
 endif
 
 if SEC_MODEM
