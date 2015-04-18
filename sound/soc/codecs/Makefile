@@ -82,6 +82,9 @@ snd-soc-wm8991-objs := wm8991.o
 snd-soc-wm8993-objs := wm8993.o
 snd-soc-wm8994-objs := wm8994.o wm8994-tables.o wm8958-dsp2.o
 snd-soc-wm8994-p3-objs := wm8994_samsung.o wm8994_p3.o
+ifeq ($(CONFIG_SND_VOODOO),y)
+snd-soc-wm8994-p3-objs += wm8994_voodoo.o
+endif
 snd-soc-wm8994-p4-objs := wm8994_samsung.o wm8994_p4.o
 snd-soc-wm8994-p5-objs := wm8994_samsung.o wm8994_p5.o
 snd-soc-wm8995-objs := wm8995.o
